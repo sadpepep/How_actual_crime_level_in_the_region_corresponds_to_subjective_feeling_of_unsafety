@@ -1,0 +1,601 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-02-25"
+---
+
+```{r}
+library(haven)
+
+install.packages('dplyr')
+library(dplyr)
+
+install.packages('tidyr')
+library(tidyr)
+
+library(readxl)
+
+library(sandwich)
+library(lmtest)
+library(stargazer)
+
+library(ggplot2)
+```
+
+```{r}
+path18 = file.path("18.sav")
+data18 = read_sav(path18) %>% select('region', 'status', 'n_age', 'nh5', 'n_educ', 'nm3', 'nj329')
+
+path19 = file.path("19.sav")
+data19 = read_sav(path19) %>% select('region', 'status', 'o_age', 'oh5', 'o_educ', 'om3', 'oj329')
+
+path25 = file.path("25.sav")
+data25 = read_sav(path25) %>% select('region', 'status', 'u_age', 'uh5', 'u_educ', 'um3', 'uj329')
+
+path26 = file.path("26.sav")
+data26 = read_sav(path26) %>% select('region', 'status', 'v_age', 'vh5', 'v_educ', 'vm3', 'vj329')
+
+
+
+#отфильтруем все "затрудняюсь ответить"
+
+data18 = data18 %>% 
+  filter(n_educ != 99999997 & n_educ != 99999998 & n_educ != 99999999) %>% 
+  filter(nj329 != 99999997 & nj329 != 99999998 & nj329 != 99999999) %>% 
+  filter(nm3 != 99999997 & nm3 != 99999998 & nm3 != 99999999) 
+data18 = data18 %>% mutate(year = rep('2009', length(data18$region)))
+
+data19 = data19 %>% 
+  filter(o_educ != 99999997 & o_educ != 99999998 & o_educ != 99999999) %>% 
+  filter(oj329 != 99999997 & oj329 != 99999998 & oj329 != 99999999) %>% 
+  filter(om3 != 99999997 & om3 != 99999998 & om3 != 99999999) 
+data19 = data19 %>% mutate(year = rep('2010', length(data19$region)))
+
+data25 = data25 %>% 
+  filter(u_educ != 99999997 & u_educ != 99999998 & u_educ != 99999999) %>% 
+  filter(uj329 != 99999997 & uj329 != 99999998 & uj329 != 99999999) %>% 
+  filter(um3 != 99999997 & um3 != 99999998 & um3 != 99999999)
+data25 = data25 %>% mutate(year = rep('2016', length(data25$region)))
+
+data26 = data26 %>% 
+  filter(v_educ != 99999997 & v_educ != 99999998 & v_educ != 99999999) %>% 
+  filter(vj329 != 99999997 & vj329 != 99999998 & vj329 != 99999999) %>% 
+  filter(vm3 != 99999997 & vm3 != 99999998 & vm3 != 99999999) 
+data26 = data26 %>% mutate(year = rep('2017', length(data26$region)))
+
+
+#переименуем нормально колонки
+
+colnames(data18) = c('code', 'locality_type', 'age', 'sex', 'education', 'bad_health', 'unsafety_level', 'year')
+colnames(data19) = c('code', 'locality_type', 'age', 'sex', 'education', 'bad_health', 'unsafety_level', 'year')
+colnames(data25) = c('code', 'locality_type', 'age', 'sex', 'education', 'bad_health', 'unsafety_level', 'year')
+colnames(data26) = c('code', 'locality_type', 'age', 'sex', 'education', 'bad_health', 'unsafety_level', 'year')
+```
+
+```{r}
+#данные по преступности в регионах
+crimes18 = read_xlsx('crimes.xlsx', sheet = '2009')
+crimes19 = read_xlsx('crimes.xlsx', sheet = '2010')
+crimes25 = read_xlsx('crimes.xlsx', sheet = '2016')
+crimes26 = read_xlsx('crimes.xlsx', sheet = '2017')
+
+crimes = rbind(crimes18, crimes19, crimes25, crimes26)
+colnames(crimes) = c('regions', 'code', 'year', 'all_crimes_to_pop', 'economic_crimes', 'moderate_crimes', 'terrorism_crimes', 'terrorism_crimes_to_pop')
+
+data = rbind(data18, data19, data25, data26)
+data$year = as.numeric(data$year)
+
+full = data %>% left_join(crimes, by = c('code', 'year'))
+full = full %>% drop_na(regions)
+
+full$unsafety_level = as.numeric(full$unsafety_level)
+full$age = as.numeric(full$age)
+full$education = as.numeric(full$education)
+full$bad_health = as.numeric(full$bad_health)
+full$locality_type = as.factor(full$locality_type)
+full$sex = as.factor(full$sex)
+```
+
+Преподготовка перед созданием модели
+
+1. Разнится ли эффект возраста для разных полов?
+
+```{r}
+full_girl = full %>% filter(sex == 2) %>% group_by(age) %>% summarise(unsafety = mean(unsafety_level))
+full_boy = full %>% filter(sex == 1) %>% group_by(age) %>% summarise(unsafety = mean(unsafety_level))
+
+# ggplot() +
+#   geom_point(data = full_girl, aes(x = age, y = unsafety), col = 'pink') + 
+#   geom_point(data = full_boy, aes(x = age, y = unsafety), col = 'blue') + ylab('mean unsafety_level') + xlab('age') + theme_minimal()
+
+
+fit1 = lm(unsafety ~ age + I(age^2), data = full_girl)
+fit2 = lm(unsafety ~ age + I(age^2), data = full_boy)
+
+plot(full_boy$age, full_boy$unsafety, col = '#948ead', type = 'p', pch = 19, frame = FALSE, 
+     xlab = 'age', ylab = 'mean unsafety level')
+lines(full_girl$age, full_girl$unsafety, col = '#CD9CB3', type = 'p', pch = 19)
+points(full_girl$age, predict(fit1), col = "#A84F79", type = 'l')
+points(full_boy$age, predict(fit2), col = "#7460C8", type = 'l')
+legend(x = "topright", legend = c("women", "men"),  lty = c(1, 1), col = c('#A84F79', '#7460C8'), lwd = 2)     
+```
+
+2. Разнится ли эффект возраста для разных типов поселений?
+
+```{r}
+# first = full %>% filter(locality_type == 1) %>% group_by(age) %>% summarise(unsafety = mean(unsafety_level))
+# second = full %>% filter(locality_type == 2) %>% group_by(age) %>% summarise(unsafety = mean(unsafety_level))
+# third = full %>% filter(locality_type == 3) %>% group_by(age) %>% summarise(unsafety = mean(unsafety_level))
+# fourth = full %>% filter(locality_type == 4) %>% group_by(age) %>% summarise(unsafety = mean(unsafety_level))
+# 
+# fit1 = lm(unsafety ~ age + I(age^2), data = first)
+# fit2 = lm(unsafety ~ age + I(age^2), data = second)
+# fit3 = lm(unsafety ~ age + I(age^2), data = third)
+# fit4 = lm(unsafety ~ age + I(age^2), data = fourth)
+# 
+# ggplot() + 
+#   geom_line(aes(first$age, predict(fit1), col = "Областной центр"), size = 0.6) +
+#   geom_line(aes(second$age, predict(fit2), col = 'Город'), size = 0.6) +
+#   geom_line(aes(third$age, predict(fit3), col = 'ПГТ'), size = 0.6) +
+#   geom_line(aes(fourth$age, predict(fit4), col = 'Село'), size = 0.6) +
+#   xlab('age') + ylab('mean unsafety level') + theme_classic() +
+#   scale_color_manual(name = "Types of Locality", values = c("Областной центр" = '#6565a5', 'Город' = "#948ead", 'ПГТ' = "#e9dcc8", 'Село' = "#A84F79"))
+```
+
+Если пол женский, то с возрастом чувство небезопасности увеличивается больше, чем у мужчин. Для городов характерно плавное возрастание чувства небезопасности с возрастом, в то время как для областного центра и села динамика нелинейна. 
+
+```{r}
+full_2009_2010 = full %>% filter(year == 2009 | year == 2010)
+full_2016_2017 = full %>% filter(year == 2016 | year == 2017)
+
+
+reg1 = lm(unsafety_level ~ age + I(age^2)*sex + locality_type + education + bad_health + terrorism_crimes_to_pop, data = full_2009_2010)
+
+reg2 = lm(unsafety_level ~ age + I(age^2)*sex + locality_type + education + bad_health + economic_crimes + moderate_crimes + terrorism_crimes + terrorism_crimes_to_pop, data = full_2016_2017)
+
+stargazer(reg1, reg2, column.labels = c("2009-2010", "2015-2016"), type = 'text')
+```
+
+Посмотрим на динамику в каждом году (график: столбцы + точки)
+
+```{r}
+unique_2009 = full %>% filter(year == 2009) %>% group_by(regions, all_crimes_to_pop) %>% summarize(unsafety = mean(unsafety_level))
+
+unique_2010 = full %>% filter(year == 2010) %>% group_by(regions, all_crimes_to_pop) %>% summarize(unsafety = mean(unsafety_level))
+
+unique_2016 = full %>% filter(year == 2016) %>% group_by(regions, all_crimes_to_pop) %>% summarize(unsafety = mean(unsafety_level))
+
+unique_2017 = full %>% filter(year == 2017) %>% group_by(regions, all_crimes_to_pop) %>% summarize(unsafety = mean(unsafety_level))
+```
+
+2009 (столбцы + точки)
+
+```{r}
+ylim.prim = c(103.00, 331.68) #crimes 2009
+ylim.sec = c(1.641026, 2.8) #unsafety 2009
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+ggplot(unique_2009, aes(y = all_crimes_to_pop, x = regions)) +
+  geom_bar(stat = 'identity', fill = 'white', col = 'black') +
+  geom_point(aes(y = a + b*unsafety), col = '#e1c7c3') + theme_classic() + ggtitle('2009') + xlab('') +
+  scale_y_continuous("all crimes to population", sec.axis = sec_axis(~ (. - a)/b, name = "unsafety")) +
+  theme(axis.ticks.y.right = element_line(color = '#e1c7c3'),
+        axis.text.y.right = element_text(color = "#e1c7c3"), 
+        axis.title.y.right = element_text(color = "#e1c7c3", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5)) 
+```
+
+2010 (столбцы + точки)
+
+```{r}
+ylim.prim = c(108.37, 279.67) #crimes 2010
+ylim.sec = c(1.743802, 2.819728) #unsafety 2010
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+ggplot(unique_2010, aes(y = all_crimes_to_pop, x = regions)) +
+  geom_bar(stat = 'identity', fill = 'white', col = 'black') +
+  geom_point(aes(y = a + b*unsafety), col = '#e1c7c3') + theme_classic() + ggtitle('2010') + xlab('') +
+  scale_y_continuous("all crimes to population", sec.axis = sec_axis(~ (. - a)/b, name = "unsafety")) +
+  theme(axis.ticks.y.right = element_line(color = '#e1c7c3'),
+        axis.text.y.right = element_text(color = "#e1c7c3"), 
+        axis.title.y.right = element_text(color = "#e1c7c3", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5)) 
+```
+
+2016 (столбцы + точки)
+
+```{r}
+ylim.prim = c(88.96, 231.55) #crimes 2016
+ylim.sec = c(1.552174, 2.769231) #unsafety 2016
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+ggplot(unique_2016, aes(y = all_crimes_to_pop, x = regions)) +
+  geom_bar(stat = 'identity', fill = '#9A95AD') +
+  geom_point(aes(y = a + b*unsafety), col = '#9F5381') + theme_classic() + ggtitle('2016') + xlab('') +
+  scale_y_continuous("all crimes to population", sec.axis = sec_axis(~ (. - a)/b, name = "unsafety")) +
+  theme(axis.ticks.y.right = element_line(color = '#9F5381'),
+        axis.text.y.right = element_text(color = "#9F5381"), 
+        axis.title.y.right = element_text(color = "#9F5381", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5)) 
+```
+
+2017 (столбцы + точки)
+
+```{r}
+ylim.prim = c(77.84, 230.81) #crimes 2017
+ylim.sec = c(1.523810, 2.852941) #unsafety 2017
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+ggplot(unique_2017, aes(y = all_crimes_to_pop, x = regions)) +
+  geom_bar(stat = 'identity', fill = '#9A95AD') +
+  geom_point(aes(y = a + b*unsafety), col = '#9F5381') + theme_classic() + ggtitle('2017') + xlab('') +
+  scale_y_continuous("all crimes to population", sec.axis = sec_axis(~ (. - a)/b, name = "unsafety")) +
+  theme(axis.ticks.y.right = element_line(color = '#9F5381'),
+        axis.text.y.right = element_text(color = "#9F5381"), 
+        axis.title.y.right = element_text(color = "#9F5381", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5))
+```
+
+2009-2010 + 2016-2017 (столбцы + точки)
+
+```{r}
+unique_2009_2010 = full %>% filter(year == 2009 | year == 2010) %>% group_by(regions, year,all_crimes_to_pop) %>% summarize(unsafety = mean(unsafety_level))
+unique_2009_2010 = unique_2009_2010 %>% group_by(regions) %>% summarise(sum_crimes = sum(all_crimes_to_pop), mean_unsafety = mean(unsafety))
+unique_2009_2010$year = rep('2009-2010', length(unique_2009_2010$regions))
+
+unique_2016_2017 = full %>% filter(year == 2016 | year == 2017) %>% group_by(regions, year,all_crimes_to_pop) %>% summarize(unsafety = mean(unsafety_level))
+unique_2016_2017 = unique_2016_2017 %>% group_by(regions) %>% summarise(sum_crimes = sum(all_crimes_to_pop), mean_unsafety = mean(unsafety))
+unique_2016_2017$year = rep('2016-2017', length(unique_2016_2017$regions))
+
+plot = rbind(unique_2009_2010, unique_2016_2017)
+
+plot$year = as.factor(plot$year)
+
+ylim.prim = c(166.80, 608.93) #crimes
+ylim.sec = c(1.567409, 2.807692) #unsafety
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+ggplot(plot, aes(y = sum_crimes, x = regions, fill = year)) +
+  geom_bar(stat = 'identity', col = 'black', position = "identity") +
+  geom_point(aes(y = a + b*mean_unsafety, col = year), size = 1.6) +
+  scale_y_continuous("sum of all crimes to population", sec.axis = sec_axis(~ (. - a_9)/b_9, name = "mean unsafety")) + theme_classic() +
+  theme(axis.ticks.y.right = element_line(color = '#9F5381'),
+        axis.text.y.right = element_text(color = "#9F5381"), 
+        axis.title.y.right = element_text(color = "#9F5381", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        axis.title.y = element_text(size = 9),
+        plot.title = element_text(hjust = 0.5)) + xlab('') +
+  scale_fill_manual('years', values = c('white', '#9A95AD')) +
+  scale_color_manual('years', values = c('#e1c7c3', '#9F5381'))
+```
+
+
+
+НОВЫЙ ГРАФИК (РАЗНОСТИ)
+
+2009 (разность между точками и столбцами)
+
+```{r}
+ylim.prim = c(103.00, 331.68) #crimes 2009
+ylim.sec = c(1.641026, 2.8) #unsafety 2009
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+unique_2009 = unique_2009 %>% mutate(col = a + b*unsafety) %>% mutate(dif = all_crimes_to_pop - col)
+
+unique_2009$regions = factor(
+                    unique_2009$regions,
+                    levels = unique_2009$regions[order(unique_2009$dif)])
+
+#график разности
+ggplot(unique_2009, aes(y = dif, x = regions)) +
+  geom_bar(stat = 'identity', fill = '#e1c7c3', col = 'black') + theme_classic() + ggtitle('2009') + xlab('') + ylab('real crime - subjective crime') +
+  theme(axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5))
+```
+
+2010 (разность между точками и столбцами)
+
+```{r}
+ylim.prim = c(108.37, 279.67) #crimes 2010
+ylim.sec = c(1.743802, 2.819728) #unsafety 2010
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+unique_2010 = unique_2010 %>% mutate(col = a + b*unsafety) %>% mutate(dif = all_crimes_to_pop - col)
+
+unique_2010$regions = factor(
+                    unique_2010$regions,
+                    levels = unique_2010$regions[order(unique_2010$dif)])
+
+#график разности
+ggplot(unique_2010, aes(y = dif, x = regions)) +
+  geom_bar(stat = 'identity', fill = '#e1c7c3', col = 'black') + theme_classic() + ggtitle('2010') + xlab('') + ylab('real crime - subjective crime') +
+  theme(axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5))
+```
+
+2016 (разность между точками и столбцами)
+
+```{r}
+ylim.prim = c(88.96, 231.55) #crimes 2016
+ylim.sec = c(1.552174, 2.769231) #unsafety 2016
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+unique_2016 = unique_2016 %>% mutate(col = a + b*unsafety) %>% mutate(dif = all_crimes_to_pop - col)
+
+unique_2016$regions = factor(
+                    unique_2016$regions,
+                    levels = unique_2016$regions[order(unique_2016$dif)])
+
+#график разности
+ggplot(unique_2016, aes(y = dif, x = regions)) +
+  geom_bar(stat = 'identity', fill = '#9F5381', col = 'black') + theme_classic() + ggtitle('2016') + xlab('') + ylab('real crime - subjective crime') +
+  theme(axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5))
+```
+
+2017 (разность между точками и столбцами)
+
+```{r}
+ylim.prim = c(77.84, 230.81) #crimes 2017
+ylim.sec = c(1.523810, 2.852941) #unsafety 2017
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+unique_2017 = unique_2017 %>% mutate(col = a + b*unsafety) %>% mutate(dif = all_crimes_to_pop - col)
+
+unique_2017$regions = factor(
+                    unique_2017$regions,
+                    levels = unique_2017$regions[order(unique_2017$dif)])
+
+#график разности
+ggplot(unique_2017, aes(y = dif, x = regions)) +
+  geom_bar(stat = 'identity', fill = '#9F5381', col = 'black') + theme_classic() + ggtitle('2017') + xlab('') + ylab('real crime - subjective crime') +
+  theme(axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5))
+```
+
+
+
+
+Выясняем, почему может быть такой большой разрыв в восприятии и реальной преступности
+
+```{r}
+reasons = full %>% filter(region == 'Красноярский край')
+reasons1 = full %>% filter(region != 'Красноярский край')
+
+summary(reasons$sex) #0.77
+summary(reasons1$sex) #0.75
+
+summary(reasons$locality_type) #только города и села --> уменьшает страх
+summary(reasons1$locality_type)
+
+summary(reasons$education) #чуть меньше чем во всей выборке --> увеличивает страх
+summary(reasons1$education)
+```
+
+```{r}
+reasons2 = full %>% filter(region == 'Кабардино-Балкарская Респ.')
+reasons3 = full %>% filter(region != 'Кабардино-Балкарская Респ.')
+
+summary(reasons2$sex) #0.89 мужчин больше --> уменьшает страх
+summary(reasons3$sex) #0.74
+
+summary(reasons2$age) #меньше чем по выборке --> уменьшает страх
+summary(reasons3$age)
+
+summary(reasons2$locality_type) #только села и пгт --> уменьшает страх
+summary(reasons3$locality_type)
+
+summary(reasons2$education) #чуть меньше чем во всей выборке --> увеличивает страх
+summary(reasons3$education)
+
+plot = reasons3 %>% group_by(age) %>% summarise(unsafety = mean(unsafety_level))
+plot(plot$age, plot$unsafety, type = 'l')
+
+plot = reasons2 %>% group_by(age) %>% summarise(sum = sum(unsafety_level))
+plot(plot$age, plot$sum, type = 'l')
+```                                                                                                                                                                                                                                   
+
+--------------------------------------------------------------------------------
+
+```{r}
+#делаем так, чтобы столбики располагались по возрастанию
+unique_2009$regions = factor(unique_2009$regions,
+                             levels = unique_2009$regions[order(unique_2009$unsafety)])
+
+
+
+ggplot(unique_2009_2010, aes(x = unsafety, y = all_crimes)) + geom_point() + geom_smooth(method = lm) + theme_classic() + ylab('crimes all') + xlab('feeling of unsafety')
+
+path = file.path("file.sav")
+dataset = read_sav(path)
+
+data = dataset %>% select('region', 'xh5', 'xh6', 'xj29c.1', 'xj29c.2', 'xj49')
+data_clean = data %>% drop_na(xj49)
+data_clean = data_clean %>% filter(xj49 == 1 | xj49 == 2) %>% filter(xj29c.1 == 1 | xj29c.1 == 2) %>% filter(xj29c.2 == 1 | xj29c.2 == 2)
+
+boxplot(data_clean$xj29c.2 ~ data_clean$xj49, col = 'white', names = c("governmental","private"), xlab = '', ylab = 'Level of trust')
+
+
+ggplot(unique, aes(y = unsafety, x = region, group=1)) + geom_bar(aes(y = a + b*crimes_all), stat = 'identity') + geom_line(color = "#948ead") + theme_classic() +
+  scale_y_continuous("crimes", sec.axis = sec_axis(~ (. - a)/b, name = "unsafety")) +
+  theme(axis.ticks.y.right = element_line(color = "#948ead"),
+        axis.text.y.right = element_text(color = "#948ead"), 
+        axis.title.y.right = element_text(color = "#948ead", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45, face = "bold")) + 
+  ylab('feeling of unsafety') + xlab('')
+
+
+upr1 = data.frame(predict(fit1, interval="confidence", level = 0.95))$upr
+upr2 = data.frame(predict(fit2, interval="confidence", level = 0.95))$upr
+upr3 = data.frame(predict(fit3, interval="confidence", level = 0.95))$upr
+upr4 = data.frame(predict(fit4, interval="confidence", level = 0.95))$upr
+
+lwr1 = data.frame(predict(fit1, interval="confidence", level = 0.95))$lwr
+lwr2 = data.frame(predict(fit2, interval="confidence", level = 0.95))$lwr
+lwr3 = data.frame(predict(fit3, interval="confidence", level = 0.95))$lwr
+lwr4 = data.frame(predict(fit4, interval="confidence", level = 0.95))$lwr
+
+
+
+library(ggplot2)
+
+#разделим на 2 периода: 
+
+### 2009-2010
+
+unique_2009_2010 = full %>% filter(year == 2009 | year == 2010) %>% group_by(regions) %>% summarize(all_crimes = sum(all_crimes_to_pop), unsafety = mean(unsafety_level))
+
+#делаем так, чтобы столбики располагались по возрастанию
+unique_2009_2010$regions = factor(unique_2009_2010$regions,
+                                  levels = unique_2009_2010$regions[order(unique_2009_2010$unsafety)])
+
+ylim.prim = c(61893.27, 282410.54) #crimes
+ylim.sec = c(1.707885, 2.806867) #unsafety
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+ggplot(unique_2009_2010, aes(y = all_crimes, x = regions)) +
+  geom_bar(stat = 'identity') +
+  geom_point(aes(y = a + b*unsafety), col = '#4c9ddd') + theme_classic() +
+  scale_y_continuous("sum of all crimes", sec.axis = sec_axis(~ (. - a)/b, name = "unsafety")) +
+  theme(axis.ticks.y.right = element_line(color = '#4c9ddd'),
+        axis.text.y.right = element_text(color = "#4c9ddd"), 
+        axis.title.y.right = element_text(color = "#4c9ddd", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45)) + xlab('') + ggtitle('2009-2010') + theme(plot.title = element_text(hjust = 0.5))
+
+
+### 2016-2017
+
+unique_2016_2017 = full %>% filter(year == 2016 | year == 2017) %>% group_by(regions) %>% summarize(all_crimes = sum(all_crimes_to_pop), unsafety = mean(unsafety_level))
+
+unique_2016_2017$regions = factor(unique_2016_2017$regions,
+                                  levels = unique_2016_2017$regions[order(unique_2016_2017$unsafety)])
+
+ylim.prim = c(36220.96, 196660.83) #crimes
+ylim.sec = c(1.567797, 2.807692) #unsafety
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+ggplot(unique_2016_2017, aes(y = all_crimes, x = regions)) +
+  geom_bar(stat = 'identity') +
+  geom_point(aes(y = a + b*unsafety), col = '#4c9ddd') + theme_classic() +
+  scale_y_continuous("sum of all crimes", sec.axis = sec_axis(~ (. - a)/b, name = "unsafety")) +
+  theme(axis.ticks.y.right = element_line(color = '#4c9ddd'),
+        axis.text.y.right = element_text(color = "#4c9ddd"), 
+        axis.title.y.right = element_text(color = "#4c9ddd", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45)) + xlab('') + ggtitle('2016-2017') + theme(plot.title = element_text(hjust = 0.5))
+
+
+
+## 2010
+
+ylim.prim = c(108.37, 279.67) #crimes 2010
+ylim.sec = c(1.743802, 2.819728) #unsafety 2010
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+ggplot(unique_2010, aes(y = all_crimes_to_pop, x = regions)) +
+  geom_bar(stat = 'identity') +
+  geom_point(aes(y = a + b*unsafety), col = '#9F5381') + theme_classic() + ggtitle('2010') + xlab('') +
+  scale_y_continuous("all crimes", sec.axis = sec_axis(~ (. - a)/b, name = "unsafety")) +
+  theme(axis.ticks.y.right = element_line(color = '#9F5381'),
+        axis.text.y.right = element_text(color = "#9F5381"), 
+        axis.title.y.right = element_text(color = "#9F5381", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5)) 
+
+
+#приготовления для графика разности между точками и столбцами
+unique_2010 = unique_2010 %>% mutate(col = a + b*unsafety) %>% mutate(dif = all_crimes_to_pop - col)
+
+unique_2010$regions = factor(
+                    unique_2010$regions,
+                    levels = unique_2010$regions[order(unique_2010$dif)])
+
+#график разности
+ggplot(unique_2010, aes(y = dif, x = regions)) +
+  geom_bar(stat = 'identity', fill = '#916B82') + theme_classic() + ggtitle('2010') + xlab('') + ylab('real crime - subjective crime') +
+  theme(axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5))
+
+
+
+# 2009-2010
+
+ylim.prim_9 = c(103.00, 331.68) #crimes 2009
+ylim.sec_9 = c(1.641026, 2.8) #unsafety 2009
+
+b_9 = diff(ylim.prim_9)/diff(ylim.sec_9)
+a_9 = ylim.prim_9[1] - b*ylim.sec_9[1]
+
+ylim.prim = c(108.37, 279.67) #crimes 2010
+ylim.sec = c(1.743802, 2.819728) #unsafety 2010
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+ggplot(unique_2009, aes(y = all_crimes_to_pop, x = regions)) +
+  geom_bar(stat = 'identity', col = 'black', fill = 'white') +
+  geom_point(data = unique_2009, aes(y = a_9 + b_9*unsafety), col = '#9F5381') +
+  
+  geom_bar(data = unique_2010, aes(y = all_crimes_to_pop), stat = 'identity', fill = '#726D85', alpha = 0.5) +
+  geom_point(data = unique_2010, aes(y = a + b*unsafety), col = 'red') +
+  
+  scale_y_continuous("all crimes to population", sec.axis = sec_axis(~ (. - a_9)/b_9, name = "unsafety")) + theme_classic() +
+  theme(axis.ticks.y.right = element_line(color = '#9F5381'),
+        axis.text.y.right = element_text(color = "#9F5381"), 
+        axis.title.y.right = element_text(color = "#9F5381", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5))  + ggtitle('2009-2010') + xlab('')
+
+
+#клевые цвета
+#2009-2010
+
+unique_2009_2010 = full %>% filter(year == 2009 | year == 2010) %>% group_by(regions, year, all_crimes_to_pop) %>% summarize(unsafety = mean(unsafety_level))
+unique_2009_2010$year = as.factor(unique_2009_2010$year)
+
+ylim.prim = c(103.00, 331.68) #crimes
+ylim.sec = c(1.641026, 2.819728) #unsafety
+
+b = diff(ylim.prim)/diff(ylim.sec)
+a = ylim.prim[1] - b*ylim.sec[1]
+
+ggplot(unique_2009_2010, aes(y = all_crimes_to_pop, x = regions, fill = year)) +
+  geom_bar(stat = 'identity', col = 'black', position = "identity") +
+  geom_point(aes(y = a + b*unsafety, col = year), size = 1.6) +
+  scale_y_continuous("all crimes to population", sec.axis = sec_axis(~ (. - a_9)/b_9, name = "unsafety")) + theme_classic() +
+  theme(axis.ticks.y.right = element_line(color = '#9F5381'),
+        axis.text.y.right = element_text(color = "#9F5381"), 
+        axis.title.y.right = element_text(color = "#9F5381", face = "bold"),
+        axis.text.x = element_text(size = 7, hjust = 1, angle = 45),
+        plot.title = element_text(hjust = 0.5)) + xlab('') +
+  scale_fill_manual(values = c('white', '#9A95AD')) +
+  scale_color_manual(values = c('#e1c7c3', '#9F5381')) + ggtitle('2009 - 2010')
+```
+
